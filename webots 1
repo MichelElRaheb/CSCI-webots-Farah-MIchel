@@ -1,0 +1,149 @@
+#include <webots/robot.h>
+#include <webots/motor.h>
+#include <webots/distance_sensor.h>
+#include <webots/light_sensor.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>  // Include this for exit()
+
+#define STEP_DURATION 64
+#define MAX_VELOCITY 6.28
+#define MAX_OBSTACLE_DISTANCE 80
+#define MAX_STEPS 5000
+
+// Global device tags
+WbDeviceTag motor_left, motor_right, light_sensor, proximity_array[8];
+
+// Function prototypes
+void initialize_robot();
+void read_sensors(double *left_sensor, double *corner_sensor, double *front_sensor, double *current_light);
+void determine_motor_speeds(bool is_left_wall, bool is_corner_wall, bool is_front_wall, double *left_speed, double *right_speed);
+void update_max_light(double current_light, double *highest_light, int *highest_step, int current_step);
+void navigate_back_to_light(int highest_light_step);
+
+int main() {
+    // Initialize robot and devices
+    initialize_robot();
+
+    double highest_light_detected = 0.0;
+    int highest_light_step = 0;
+
+    // Main loop to navigate the environment
+    for (int step = 0; wb_robot_step(STEP_DURATION) != -1; step++) {
+        // Sensor readings
+        double left_sensor, corner_sensor, front_sensor, current_light;
+        read_sensors(&left_sensor, &corner_sensor, &front_sensor, &current_light);
+
+        // Determine obstacle presence
+        bool is_left_wall = left_sensor > MAX_OBSTACLE_DISTANCE;
+        bool is_corner_wall = corner_sensor > MAX_OBSTACLE_DISTANCE;
+        bool is_front_wall = front_sensor > MAX_OBSTACLE_DISTANCE;
+
+        // Adjust motor speeds
+        double motor_speed_left, motor_speed_right;
+        determine_motor_speeds(is_left_wall, is_corner_wall, is_front_wall, &motor_speed_left, &motor_speed_right);
+
+        // Update the maximum light intensity observed
+        update_max_light(current_light, &highest_light_detected, &highest_light_step, step);
+
+        // Apply motor velocities
+        wb_motor_set_velocity(motor_left, motor_speed_left);
+        wb_motor_set_velocity(motor_right, motor_speed_right);
+
+        // Exit simulation condition
+        if (step > MAX_STEPS) {
+            printf("Navigation completed. Returning to brightest point.\n");
+            break;
+        }
+    }
+
+    printf("Maximum Light Intensity: %f detected at step %d\n", highest_light_detected, highest_light_step);
+
+    // Navigate back to the brightest point
+    navigate_back_to_light(highest_light_step);
+
+    printf("Returned to brightest point successfully.\n");
+
+    // Clean up Webots resources
+    wb_robot_cleanup();
+
+    return 0;
+}
+
+// Function to initialize the robot and its devices
+void initialize_robot() {
+    wb_robot_init();
+
+    // Initialize motors
+    motor_left = wb_robot_get_device("left wheel motor");
+    motor_right = wb_robot_get_device("right wheel motor");
+    if (motor_left == 0 || motor_right == 0) {
+        printf("Error: Motors not found.\n");
+        wb_robot_cleanup();
+        exit(-1);
+    }
+
+    wb_motor_set_position(motor_left, INFINITY);
+    wb_motor_set_position(motor_right, INFINITY);
+
+    // Initialize light sensor
+    light_sensor = wb_robot_get_device("ls0");
+    wb_light_sensor_enable(light_sensor, STEP_DURATION);
+
+    // Initialize proximity sensors
+    char sensor_label[20];
+    for (int i = 0; i < 8; i++) {
+        sprintf(sensor_label, "ps%d", i);
+        proximity_array[i] = wb_robot_get_device(sensor_label);
+        wb_distance_sensor_enable(proximity_array[i], STEP_DURATION);
+    }
+}
+
+// Function to read sensor values
+void read_sensors(double *left_sensor, double *corner_sensor, double *front_sensor, double *current_light) {
+    *left_sensor = wb_distance_sensor_get_value(proximity_array[5]);
+    *corner_sensor = wb_distance_sensor_get_value(proximity_array[6]);
+    *front_sensor = wb_distance_sensor_get_value(proximity_array[7]);
+    *current_light = wb_light_sensor_get_value(light_sensor);
+}
+
+// Function to determine motor speeds based on obstacle presence
+void determine_motor_speeds(bool is_left_wall, bool is_corner_wall, bool is_front_wall, double *left_speed, double *right_speed) {
+    *left_speed = MAX_VELOCITY;
+    *right_speed = MAX_VELOCITY;
+
+    if (is_front_wall) {
+        // Turn right if front wall is detected
+        *left_speed = MAX_VELOCITY;
+        *right_speed = -MAX_VELOCITY;
+    } else if (is_left_wall) {
+        // Move forward if there is a wall on the left
+        *left_speed = MAX_VELOCITY;
+        *right_speed = MAX_VELOCITY;
+    } else if (is_corner_wall) {
+        // Slightly turn left at a corner
+        *left_speed = MAX_VELOCITY;
+        *right_speed = MAX_VELOCITY / 8;
+    } else {
+        // Default behavior: slight left turn in open space
+        *left_speed = MAX_VELOCITY / 8;
+        *right_speed = MAX_VELOCITY;
+    }
+}
+
+// Function to update the maximum light intensity
+void update_max_light(double current_light, double *highest_light, int *highest_step, int current_step) {
+    if (current_light > *highest_light) {
+        *highest_light = current_light;
+        *highest_step = current_step;
+    }
+}
+
+// Function to navigate back to the brightest point
+void navigate_back_to_light(int highest_light_step) {
+    for (int step = 0; step < highest_light_step / 2; step++) {
+        wb_motor_set_velocity(motor_left, -MAX_VELOCITY);
+        wb_motor_set_velocity(motor_right, -MAX_VELOCITY);
+        wb_robot_step(STEP_DURATION);
+    }
+}
